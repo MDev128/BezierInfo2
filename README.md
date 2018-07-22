@@ -4,8 +4,8 @@ Dev repository for https://Pomax.github.io/bezierinfo
 
 ## Working on the code
 
-- To run this dev version: `npm start`, then view in the browser on [http://localhost:8080](http://localhost:8080)
-- To compile for production: `npm run build`.
+- To run this dev version: `npm test`, then view in the browser on [http://localhost:8080](http://localhost:8080)
+- To compile for production: `npm start`
 
 Both operations run continuous linting. Also note that there are specific requirements for development, see the section on dev requirements below.
 

@@ -102,7 +102,7 @@ return /******/ (function(modules) { // webpackBootstrap
 
 
 var React = __webpack_require__(1);
-var Locale = __webpack_require__(11);
+var Locale = __webpack_require__(12);
 var locale = new Locale();
 
 module.exports = function generateBase(page, handler) {
@@ -1885,6 +1885,194 @@ if (false) { var throwOnDirectAccess, isValidElement, REACT_ELEMENT_TYPE; } else
 
 /***/ }),
 /* 5 */
+/***/ (function(module, exports, __webpack_require__) {
+
+var invert = __webpack_require__(7);
+var matrices = [];
+
+const POLYGONAL = 'polygonal', EQUIDISTANT = 'equidistant';
+
+var binomialCoefficients = [[1],[1,1]];
+
+function binomial(n,k) {
+  if (n===0) return 1;
+  var lut = binomialCoefficients;
+  while(n >= lut.length) {
+    var s = lut.length;
+    var nextRow = [1];
+    for(var i=1,prev=s-1; i<s; i++) {
+      nextRow[i] = lut[prev][i-1] + lut[prev][i];
+    }
+    nextRow[s] = 1;
+    lut.push(nextRow);
+  }
+  return lut[n][k];
+}
+
+
+function dist(p1,p2) {
+  var dx = p1.x - p2.x, dy = p1.y - p2.y;
+  return Math.sqrt(dx*dx + dy*dy);
+}
+
+function transpose(M) {
+  var Mt = [];
+  M.forEach(row => Mt.push([]));
+  M.forEach((row,r) => row.forEach((v,c) => Mt[c][r] = v));
+  return Mt;
+}
+
+function row(M,i) {
+  return M[i];
+}
+
+function col(M,i) {
+  var col = [];
+  for(var r=0, l=M.length; r<l; r++) {
+    col.push(M[r][i]);
+  }
+  return col;
+}
+
+function multiply(M1, M2) {
+  // prep
+  var M = [];
+  var dims = [M1.length, M1[0].length, M2.length, M2[0].length];
+  // work
+  for (var r=0, c; r<dims[0]; r++) {
+    M[r] = [];
+    var _row = row(M1, r);
+    for (c=0; c<dims[3]; c++) {
+      var _col = col(M2,c);
+      var reducer = (a,v,i) => a + _col[i]*v;
+      M[r][c] = _row.reduce(reducer, 0);
+    }
+  }
+  return M;
+}
+
+function getValueColumn(P, prop) {
+  var col = [];
+  P.forEach(v => col.push([v[prop]]));
+  return col;
+}
+
+function computeBasisMatrix(n) {
+  /*
+    We can form any basis matrix using a generative approach:
+
+     - it's an M = (n x n) matrix
+     - it's a lower triangular matrix: all the entries above the main diagonal are zero
+     - the main diagonal consists of the binomial coefficients for n
+     - all entries are symmetric about the antidiagonal.
+
+    What's more, if we number rows and columns starting at 0, then
+    the value at position M[r,c], with row=r and column=c, can be
+    expressed as:
+
+      M[r,c] = (r choose c) * M[r,r] * S,
+
+      where S = 1 if r+c is even, or -1 otherwise
+
+    That is: the values in column c are directly computed off of the
+    binomial coefficients on the main diagonal, through multiplication
+    by a binomial based on matrix position, with the sign of the value
+    also determined by matrix position. This is actually very easy to
+    write out in code:
+  */
+
+  // form the square matrix, and set it to all zeroes
+  var M = [], i = n;
+  while (i--) { M[i] = "0".repeat(n).split('').map(v => parseInt(v)); }
+
+  // populate the main diagonal
+  var k = n - 1;
+  for (i=0; i<n; i++) { M[i][i] = binomial(k, i); }
+
+  // compute the remaining values
+  for (var c=0, r; c<n; c++) {
+    for (r=c+1; r<n; r++) {
+      var sign = (r+c)%2 ? -1 : 1;
+      var value = binomial(r, c) * M[r][r];
+      M[r][c] = sign * value; }}
+
+  return M;
+}
+
+var computeTimeValues = {};
+
+computeTimeValues[POLYGONAL] = function computePolygonalTimeValues(P, n) {
+  n = n || P.length;
+  var D = [0];
+  for(var i = 1; i<n; i++) {
+    D[i] = D[i-1] + dist(P[i-1], P[i]);
+  }
+  var S = [0], len = D[n-1];
+  D.forEach((v,i) => { S[i] = v/len; });
+  return S;
+}
+
+computeTimeValues[EQUIDISTANT] = function computeEquidistantTimeValues(P, n) {
+  return '0'.repeat(n).split('').map((_,i) =>i/(n-1));
+}
+
+function raiseRowPower(row, i) {
+  return row.map(v => Math.pow(v,i));
+}
+
+function formTMatrix(S, n) {
+  n = n || S.length;
+  var Tp = [];
+  // it's easier to generate the transposed matrix:
+  for(var i=0; i<n; i++) Tp.push( raiseRowPower(S, i));
+  return {
+    Tt: Tp,
+    T: transpose(Tp) // and then transpose "again" to get the real matrix
+  };
+}
+
+function computeBestFit(P, M, S, n) {
+  n = n || P.length;
+  var tm = formTMatrix(S, n),
+      T = tm.T,
+      Tt = tm.Tt,
+      M1 = invert(M),
+      TtT1 = invert(multiply(Tt,T)),
+      step1 = multiply(TtT1, Tt),
+      step2 = multiply(M1, step1),
+      X = getValueColumn(P,'x'),
+      Cx = multiply(step2, X),
+      Y = getValueColumn(P,'y'),
+      Cy = multiply(step2, Y);
+  return { x: Cx, y: Cy };
+}
+
+function fit(points, mode) {
+  // mode could be an int index to fit.modes, below,
+  // which are used to abstract time values, OR it
+  // could be a prespecified array of time values to
+  // be used in the final curve fitting step.
+  var TS;
+  if (mode instanceof Array) {
+    TS = mode;
+    mode = false;
+  }
+  mode = mode || 0;
+  var n = points.length,
+      P = Array.from(points),
+      M = computeBasisMatrix(n),
+      S = TS || computeTimeValues[fit.modes[mode]](P, n),
+      C = computeBestFit(P, M, S, n);
+  return { n, P, M, S, C };
+}
+
+fit.modes = [ POLYGONAL, EQUIDISTANT];
+
+module.exports = fit;
+
+
+/***/ }),
+/* 6 */
 /***/ (function(module, exports) {
 
 module.exports = function transpose(M) {
@@ -1893,7 +2081,7 @@ module.exports = function transpose(M) {
 
 
 /***/ }),
-/* 6 */
+/* 7 */
 /***/ (function(module, exports) {
 
 // Copied from http://blog.acipo.com/matrix-inversion-in-javascript/
@@ -2007,7 +2195,7 @@ module.exports = function matrix_invert(M) {
 };
 
 /***/ }),
-/* 7 */
+/* 8 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -2067,33 +2255,33 @@ module.exports = {
   curvefitting: __webpack_require__(47),
 
   // A quick foray into Catmull-Rom splines
-  catmullconv: __webpack_require__(44),
-  catmullmoulding: __webpack_require__(43),
+  catmullconv: __webpack_require__(45),
+  catmullmoulding: __webpack_require__(44),
 
   // "things made of more than on curve"
-  polybezier: __webpack_require__(41),
-  shapes: __webpack_require__(39),
-  drawing: __webpack_require__(37),
+  polybezier: __webpack_require__(42),
+  shapes: __webpack_require__(40),
+  drawing: __webpack_require__(38),
 
   // curve offsetting
-  projections: __webpack_require__(34),
-  offsetting: __webpack_require__(32),
-  graduatedoffset: __webpack_require__(30),
+  projections: __webpack_require__(35),
+  offsetting: __webpack_require__(33),
+  graduatedoffset: __webpack_require__(31),
 
   // circle and arc approximation
-  circles: __webpack_require__(28),
-  circles_cubic: __webpack_require__(26),
-  arcapproximation: __webpack_require__(24),
+  circles: __webpack_require__(29),
+  circles_cubic: __webpack_require__(27),
+  arcapproximation: __webpack_require__(25),
 
   // A quick foray in to B-Spline land
-  bsplines: __webpack_require__(22),
+  bsplines: __webpack_require__(23),
 
   // comments come last for obvious reasons
-  comments: __webpack_require__(14)
+  comments: __webpack_require__(15)
 };
 
 /***/ }),
-/* 8 */
+/* 9 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -2133,7 +2321,7 @@ var SectionHeader = React.createClass({
 module.exports = SectionHeader;
 
 /***/ }),
-/* 9 */
+/* 10 */
 /***/ (function(module, exports, __webpack_require__) {
 
 (function() {
@@ -2383,7 +2571,7 @@ module.exports = SectionHeader;
     },
 
     makeline: function(p1, p2) {
-      var Bezier = __webpack_require__(10);
+      var Bezier = __webpack_require__(11);
       var x1 = p1.x,
         y1 = p1.y,
         x2 = p2.x,
@@ -2825,7 +3013,7 @@ module.exports = SectionHeader;
 
 
 /***/ }),
-/* 10 */
+/* 11 */
 /***/ (function(module, exports, __webpack_require__) {
 
 /**
@@ -2851,7 +3039,7 @@ module.exports = SectionHeader;
       ZERO = {x:0,y:0,z:0};
 
   // quite needed
-  var utils = __webpack_require__(9);
+  var utils = __webpack_require__(10);
 
   // not quite needed, but eventually this'll be useful...
   var PolyBezier = __webpack_require__(113);
@@ -3691,7 +3879,7 @@ module.exports = SectionHeader;
 
 
 /***/ }),
-/* 11 */
+/* 12 */
 /***/ (function(module, exports, __webpack_require__) {
 
 var data = __webpack_require__(122);
@@ -3719,7 +3907,7 @@ module.exports = Locale;
 
 
 /***/ }),
-/* 12 */
+/* 13 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -3764,7 +3952,7 @@ var Footer = React.createClass({
 module.exports = Footer;
 
 /***/ }),
-/* 13 */
+/* 14 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -3808,18 +3996,18 @@ module.exports = {
 };
 
 /***/ }),
-/* 14 */
+/* 15 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
 
-var handler = __webpack_require__(13);
+var handler = __webpack_require__(14);
 var generateBase = __webpack_require__(0);
 module.exports = generateBase("comments", handler);
 
 /***/ }),
-/* 15 */
+/* 16 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -3879,7 +4067,7 @@ module.exports = {
 };
 
 /***/ }),
-/* 16 */
+/* 17 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -3934,7 +4122,7 @@ module.exports = {
 };
 
 /***/ }),
-/* 17 */
+/* 18 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -3996,7 +4184,7 @@ module.exports = {
 };
 
 /***/ }),
-/* 18 */
+/* 19 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -4049,7 +4237,7 @@ module.exports = {
 };
 
 /***/ }),
-/* 19 */
+/* 20 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -4151,7 +4339,7 @@ module.exports = {
 };
 
 /***/ }),
-/* 20 */
+/* 21 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -4191,19 +4379,19 @@ module.exports = {
 };
 
 /***/ }),
-/* 21 */
+/* 22 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
 
 module.exports = {
-  basicSketch: __webpack_require__(20),
-  interpolationGraph: __webpack_require__(19),
-  uniformBSpline: __webpack_require__(18),
-  centerCutBSpline: __webpack_require__(17),
-  openUniformBSpline: __webpack_require__(16),
-  rationalUniformBSpline: __webpack_require__(15),
+  basicSketch: __webpack_require__(21),
+  interpolationGraph: __webpack_require__(20),
+  uniformBSpline: __webpack_require__(19),
+  centerCutBSpline: __webpack_require__(18),
+  openUniformBSpline: __webpack_require__(17),
+  rationalUniformBSpline: __webpack_require__(16),
 
   bindKnots: function bindKnots(owner, knots, ref) {
     this.refs[ref].bindKnots(owner, knots);
@@ -4215,18 +4403,18 @@ module.exports = {
 };
 
 /***/ }),
-/* 22 */
+/* 23 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
 
-var handler = __webpack_require__(21);
+var handler = __webpack_require__(22);
 var generateBase = __webpack_require__(0);
 module.exports = generateBase("bsplines", handler);
 
 /***/ }),
-/* 23 */
+/* 24 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -4408,19 +4596,19 @@ module.exports = {
 };
 
 /***/ }),
-/* 24 */
+/* 25 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
 
-var handler = __webpack_require__(23);
+var handler = __webpack_require__(24);
 var generateBase = __webpack_require__(0);
 var keyHandling = __webpack_require__(3);
 module.exports = keyHandling(generateBase("arcapproximation", handler));
 
 /***/ }),
-/* 25 */
+/* 26 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -4632,18 +4820,18 @@ module.exports = {
 };
 
 /***/ }),
-/* 26 */
+/* 27 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
 
-var handler = __webpack_require__(25);
+var handler = __webpack_require__(26);
 var generateBase = __webpack_require__(0);
 module.exports = generateBase("circles_cubic", handler);
 
 /***/ }),
-/* 27 */
+/* 28 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -4708,18 +4896,18 @@ module.exports = {
 };
 
 /***/ }),
-/* 28 */
+/* 29 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
 
-var handler = __webpack_require__(27);
+var handler = __webpack_require__(28);
 var generateBase = __webpack_require__(0);
 module.exports = generateBase("circles", handler);
 
 /***/ }),
-/* 29 */
+/* 30 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -4765,19 +4953,19 @@ module.exports = {
 };
 
 /***/ }),
-/* 30 */
+/* 31 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
 
-var handler = __webpack_require__(29);
+var handler = __webpack_require__(30);
 var generateBase = __webpack_require__(0);
 var keyHandling = __webpack_require__(3);
 module.exports = keyHandling(generateBase("graduatedoffset", handler));
 
 /***/ }),
-/* 31 */
+/* 32 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -4843,19 +5031,19 @@ module.exports = {
 };
 
 /***/ }),
-/* 32 */
+/* 33 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
 
-var handler = __webpack_require__(31);
+var handler = __webpack_require__(32);
 var generateBase = __webpack_require__(0);
 var keyHandling = __webpack_require__(3);
 module.exports = keyHandling(generateBase("offsetting", handler));
 
 /***/ }),
-/* 33 */
+/* 34 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -4909,18 +5097,18 @@ module.exports = {
 };
 
 /***/ }),
-/* 34 */
+/* 35 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
 
-var handler = __webpack_require__(33);
+var handler = __webpack_require__(34);
 var generateBase = __webpack_require__(0);
 module.exports = generateBase("projections", handler);
 
 /***/ }),
-/* 35 */
+/* 36 */
 /***/ (function(module, exports, __webpack_require__) {
 
 var tau = Math.PI*2;
@@ -5009,13 +5197,21 @@ if(true) {
 
 
 /***/ }),
-/* 36 */
+/* 37 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
 
-var RDP = __webpack_require__(35);
+var RDP = __webpack_require__(36);
+var fit = __webpack_require__(5);
+
+var colors = ['#999', '#499', '#949', '#994', '#449', '#944', '#444'];
+
+function getPseudoRandomColor(i) {
+  i = i % colors.length;
+  return colors[i];
+}
 
 module.exports = {
   setup: function setup(api) {
@@ -5030,13 +5226,39 @@ module.exports = {
   },
 
   draw: function draw(api, curve) {
+    // is there a reduced set to draw?
     if (this.reduced.length > 0) {
       api.setColor('red');
       api.drawPoints(this.reduced);
-      api.setColor('grey');
-    } else {
-      api.setColor('black');
+
+      // make curves
+      var curves = [],
+          fc,
+          points;
+      for (var i = 0, e = this.reduced.length; i < e; i += 3) {
+        fc = fit(this.reduced.slice(i, i + 4));
+        // for now, don't build if we can't build a cubic.
+        if (fc.C.x.length < 4) break;
+        points = fc.C.x.map(function (x, i) {
+          return {
+            x: x[0],
+            y: fc.C.y[i][0]
+          };
+        });
+        curves.push(new api.Bezier(points));
+      }
+      curves.forEach(function (c, i) {
+        api.setColor(getPseudoRandomColor(i));
+        api.drawCurve(c);
+      });
+
+      // make catmull-rom curves
+
+      // ...code goes here...
     }
+
+    // draw the user supplied path points
+    api.setColor('black');
     var last = this.coordinates.length - 1;
     if (last >= 0) {
       api.drawPoint(this.coordinates[last]);
@@ -5056,18 +5278,18 @@ module.exports = {
 };
 
 /***/ }),
-/* 37 */
+/* 38 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
 
-var handler = __webpack_require__(36);
+var handler = __webpack_require__(37);
 var generateBase = __webpack_require__(0);
 module.exports = generateBase("drawing", handler);
 
 /***/ }),
-/* 38 */
+/* 39 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -5148,18 +5370,18 @@ module.exports = {
 };
 
 /***/ }),
-/* 39 */
+/* 40 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
 
-var handler = __webpack_require__(38);
+var handler = __webpack_require__(39);
 var generateBase = __webpack_require__(0);
 module.exports = generateBase("shapes", handler);
 
 /***/ }),
-/* 40 */
+/* 41 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -5428,18 +5650,18 @@ module.exports = {
 };
 
 /***/ }),
-/* 41 */
+/* 42 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
 
-var handler = __webpack_require__(40);
+var handler = __webpack_require__(41);
 var generateBase = __webpack_require__(0);
 module.exports = generateBase("polybezier", handler);
 
 /***/ }),
-/* 42 */
+/* 43 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -5573,19 +5795,19 @@ module.exports = {
 };
 
 /***/ }),
-/* 43 */
+/* 44 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
 
-var handler = __webpack_require__(42);
+var handler = __webpack_require__(43);
 var generateBase = __webpack_require__(0);
 var keyHandling = __webpack_require__(3);
 module.exports = keyHandling(generateBase("catmullmoulding", handler));
 
 /***/ }),
-/* 44 */
+/* 45 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -5595,201 +5817,13 @@ var generateBase = __webpack_require__(0);
 module.exports = generateBase("catmullconv");
 
 /***/ }),
-/* 45 */
-/***/ (function(module, exports, __webpack_require__) {
-
-var invert = __webpack_require__(6);
-var matrices = [];
-
-const POLYGONAL = 'polygonal', EQUIDISTANT = 'equidistant';
-
-var binomialCoefficients = [[1],[1,1]];
-
-function binomial(n,k) {
-  if (n===0) return 1;
-  var lut = binomialCoefficients;
-  while(n >= lut.length) {
-    var s = lut.length;
-    var nextRow = [1];
-    for(var i=1,prev=s-1; i<s; i++) {
-      nextRow[i] = lut[prev][i-1] + lut[prev][i];
-    }
-    nextRow[s] = 1;
-    lut.push(nextRow);
-  }
-  return lut[n][k];
-}
-
-
-function dist(p1,p2) {
-  var dx = p1.x - p2.x, dy = p1.y - p2.y;
-  return Math.sqrt(dx*dx + dy*dy);
-}
-
-function transpose(M) {
-  var Mt = [];
-  M.forEach(row => Mt.push([]));
-  M.forEach((row,r) => row.forEach((v,c) => Mt[c][r] = v));
-  return Mt;
-}
-
-function row(M,i) {
-  return M[i];
-}
-
-function col(M,i) {
-  var col = [];
-  for(var r=0, l=M.length; r<l; r++) {
-    col.push(M[r][i]);
-  }
-  return col;
-}
-
-function multiply(M1, M2) {
-  // prep
-  var M = [];
-  var dims = [M1.length, M1[0].length, M2.length, M2[0].length];
-  // work
-  for (var r=0, c; r<dims[0]; r++) {
-    M[r] = [];
-    var _row = row(M1, r);
-    for (c=0; c<dims[3]; c++) {
-      var _col = col(M2,c);
-      var reducer = (a,v,i) => a + _col[i]*v;
-      M[r][c] = _row.reduce(reducer, 0);
-    }
-  }
-  return M;
-}
-
-function getValueColumn(P, prop) {
-  var col = [];
-  P.forEach(v => col.push([v[prop]]));
-  return col;
-}
-
-function computeBasisMatrix(n) {
-  /*
-    We can form any basis matrix using a generative approach:
-
-     - it's an M = (n x n) matrix
-     - it's a lower triangular matrix: all the entries above the main diagonal are zero
-     - the main diagonal consists of the binomial coefficients for n
-     - all entries are symmetric about the antidiagonal.
-
-    What's more, if we number rows and columns starting at 0, then
-    the value at position M[r,c], with row=r and column=c, can be
-    expressed as:
-
-      M[r,c] = (r choose c) * M[r,r] * S,
-
-      where S = 1 if r+c is even, or -1 otherwise
-
-    That is: the values in column c are directly computed off of the
-    binomial coefficients on the main diagonal, through multiplication
-    by a binomial based on matrix position, with the sign of the value
-    also determined by matrix position. This is actually very easy to
-    write out in code:
-  */
-
-  // form the square matrix, and set it to all zeroes
-  var M = [], i = n;
-  while (i--) { M[i] = "0".repeat(n).split('').map(v => parseInt(v)); }
-
-  // populate the main diagonal
-  var k = n - 1;
-  for (i=0; i<n; i++) { M[i][i] = binomial(k, i); }
-
-  // compute the remaining values
-  for (var c=0, r; c<n; c++) {
-    for (r=c+1; r<n; r++) {
-      var sign = (r+c)%2 ? -1 : 1;
-      var value = binomial(r, c) * M[r][r];
-      M[r][c] = sign * value; }}
-
-  return M;
-}
-
-var computeTimeValues = {};
-
-computeTimeValues[POLYGONAL] = function computePolygonalTimeValues(P, n) {
-  n = n || P.length;
-  var D = [0];
-  for(var i = 1; i<n; i++) {
-    D[i] = D[i-1] + dist(P[i-1], P[i]);
-  }
-  var S = [0], len = D[n-1];
-  D.forEach((v,i) => { S[i] = v/len; });
-  return S;
-}
-
-computeTimeValues[EQUIDISTANT] = function computeEquidistantTimeValues(P, n) {
-  return '0'.repeat(n).split('').map((_,i) =>i/(n-1));
-}
-
-function raiseRowPower(row, i) {
-  return row.map(v => Math.pow(v,i));
-}
-
-function formTMatrix(S, n) {
-  n = n || S.length;
-  var Tp = [];
-  // it's easier to generate the transposed matrix:
-  for(var i=0; i<n; i++) Tp.push( raiseRowPower(S, i));
-  return {
-    Tt: Tp,
-    T: transpose(Tp) // and then transpose "again" to get the real matrix
-  };
-}
-
-function computeBestFit(P, M, S, n) {
-  n = n || P.length;
-  var tm = formTMatrix(S, n),
-      T = tm.T,
-      Tt = tm.Tt,
-      M1 = invert(M),
-      TtT1 = invert(multiply(Tt,T)),
-      step1 = multiply(TtT1, Tt),
-      step2 = multiply(M1, step1),
-      X = getValueColumn(P,'x'),
-      Cx = multiply(step2, X),
-      Y = getValueColumn(P,'y'),
-      Cy = multiply(step2, Y);
-  return { x: Cx, y: Cy };
-}
-
-function fit(points, mode) {
-  // mode could be an int index to fit.modes, below,
-  // which are used to abstract time values, OR it
-  // could be a prespecified array of time values to
-  // be used in the final curve fitting step.
-  var TS;
-  if (mode instanceof Array) {
-    TS = mode;
-    mode = false;
-  }
-  mode = mode || 0;
-  var n = points.length,
-      P = Array.from(points),
-      M = computeBasisMatrix(n),
-      S = TS || computeTimeValues[fit.modes[mode]](P, n),
-      C = computeBestFit(P, M, S, n);
-  return { n, P, M, S, C };
-}
-
-fit.modes = [ POLYGONAL, EQUIDISTANT];
-
-module.exports = window.makeFit = fit;
-
-
-/***/ }),
 /* 46 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
 
-var fit = __webpack_require__(45);
+var fit = __webpack_require__(5);
 
 module.exports = {
   setup: function setup(api) {
@@ -7981,7 +8015,7 @@ module.exports = generateBase("pointvectors", handler);
 /* 82 */
 /***/ (function(module, exports, __webpack_require__) {
 
-var transpose = __webpack_require__(5);
+var transpose = __webpack_require__(6);
 
 module.exports = function multiply(m1, m2) {
 	var M = [];
@@ -8003,9 +8037,9 @@ module.exports = function multiply(m1, m2) {
 "use strict";
 
 
-var invert = __webpack_require__(6);
+var invert = __webpack_require__(7);
 var multiply = __webpack_require__(82);
-var transpose = __webpack_require__(5);
+var transpose = __webpack_require__(6);
 
 var Reordering = {
   statics: {
@@ -8948,9 +8982,9 @@ module.exports = generateBase("preface");
 
 
 var React = __webpack_require__(1);
-var sections = __webpack_require__(7);
+var sections = __webpack_require__(8);
 var sectionPages = Object.keys(sections);
-var SectionHeader = __webpack_require__(8);
+var SectionHeader = __webpack_require__(9);
 
 var Navigation = React.createClass({
   displayName: "Navigation",
@@ -9782,7 +9816,7 @@ module.exports = function() {
 (function() {
   "use strict";
 
-  var utils = __webpack_require__(9);
+  var utils = __webpack_require__(10);
 
   /**
    * Poly Bezier
@@ -9841,7 +9875,7 @@ module.exports = function() {
 /* 114 */
 /***/ (function(module, exports, __webpack_require__) {
 
-module.exports = __webpack_require__(10);
+module.exports = __webpack_require__(11);
 
 
 /***/ }),
@@ -28235,7 +28269,7 @@ module.exports = React.createClass(baseClass);
 
 var React = __webpack_require__(1);
 var Graphic = __webpack_require__(121);
-var SectionHeader = __webpack_require__(8);
+var SectionHeader = __webpack_require__(9);
 var BSplineGraphic = __webpack_require__(111);
 var KnotController = __webpack_require__(109);
 var WeightController = __webpack_require__(108);
@@ -34847,17 +34881,35 @@ module.exports = {
               React.createElement(
                 "li",
                 null,
-                "high order bezier, split and reduced"
+                "fit compound quadratic/cubic bezier",
+                React.createElement(
+                  "ul",
+                  null,
+                  React.createElement(
+                    "li",
+                    null,
+                    "naive"
+                  ),
+                  React.createElement(
+                    "li",
+                    null,
+                    "corrected for C1/C2"
+                  )
+                )
               ),
               React.createElement(
                 "li",
                 null,
-                "fit compound bezier"
-              ),
-              React.createElement(
-                "li",
-                null,
-                "catmull-rom"
+                "also fit using catmull-rom approach",
+                React.createElement(
+                  "ul",
+                  null,
+                  React.createElement(
+                    "li",
+                    null,
+                    "simpler, \"easier\" control, but can look very different/wrong."
+                  )
+                )
               )
             )
           )
@@ -37348,7 +37400,7 @@ module.exports = {
 
 var React = __webpack_require__(1);
 
-var Locale = __webpack_require__(11);
+var Locale = __webpack_require__(12);
 var locale = new Locale();
 var page = "locale-switcher";
 
@@ -37378,19 +37430,20 @@ module.exports = {
 module.exports = {
 
   "July 2018": [
-    "Solved a long-standing problem around 3D normals, by implementing and explaining Rotation Minimising Frames.",
-    "Updated the section on curve order raising/lowering, showing how to get a least-squares optimized lower order curve."
+    "Rewrote the 3D normals section, implementing and explaining Rotation Minimising Frames.",
+    "Updated the section on curve order raising/lowering, showing how to get a least-squares optimized lower order curve.",
+    "(Finally) updated 'npm test' so that it automatically rebuilds when files are changed while the dev server is running."
   ],
 
   "June 2018": [
     "Added a section on direct curve fitting.",
     "Added source links for all graphics.",
-    "Added the \"What's new?\" section."
+    "Added this \"What's new?\" section."
   ],
 
   "April 2017": [
     "Added a section on 3d normals.",
-    "Added live-updatign for the social link buttons, so it points to the specific section you're reading."
+    "Added live-updating for the social link buttons, so they always link to the specific section you're reading."
   ],
 
   "February 2017": [
@@ -37398,17 +37451,17 @@ module.exports = {
   ],
 
   "January 2016": [
-    "Added a section the Bezier interval."
+    "Added a section to explain the Bezier interval."
   ],
 
   "December 2015": [
     "Set up the split repository between BezierInfo-2 as development repository, and bezierinfo as live page.",
-    "Removed the need for client-side LaTeX parsing entirely."
+    "Removed the need for client-side LaTeX parsing entirely, so the site doesn't take a full minute or more to load all the graphics."
   ],
 
   "May 2015": [
-    "Switched over to pure JS rather than Processing using Processing.js",
-    "Added Cardano's algorithm."
+    "Switched over to pure JS rather than Processing-through-Processing.js",
+    "Added Cardano's algorithm for finding the roots of a cubic polynomial."
   ],
 
   "April 2015": [
@@ -37437,20 +37490,20 @@ module.exports = {
   ],
 
   "April 2013": [
-    "Added a section on poly-Bbeziers.",
+    "Added a section on poly-Beziers.",
     "Added a section on boolean shape operations."
   ],
 
   "March 2013": [
     "First drastic rewrite",
-    "Added the sections on circle approximations.",
-    "Added a section on projecting a point on a curve.",
+    "Added sections on circle approximations.",
+    "Added a section on projecting a point onto a curve.",
     "Added a section on tangents and normals.",
     "Added Legendre-Gauss numerical data tables."
   ],
 
   "October 2011": [
-    "First github commit, based on the pre-Primer webpage that covered the basics of Bezier curves in HTML with Processing.js example."
+    "First commit for the https://pomax.github.io/bezierinfo site, based on the pre-Primer webpage that covered the basics of Bezier curves in HTML with Processing.js examples."
   ]
 
 };
@@ -37624,7 +37677,7 @@ var Header = __webpack_require__(127);
 var Changelog = __webpack_require__(126);
 var LocaleSwitcher = __webpack_require__(124).LocaleSwitcher;
 var Navigation = __webpack_require__(106);
-var Footer = __webpack_require__(12);
+var Footer = __webpack_require__(13);
 
 var Page = React.createClass({
   displayName: "Page",
@@ -37664,7 +37717,7 @@ module.exports = Page;
 var React = __webpack_require__(1);
 var Page = __webpack_require__(129);
 
-var sectionList = __webpack_require__(7),
+var sectionList = __webpack_require__(8),
     sectionMap = function sectionMap(mapping) {
   return Object.keys(sectionList).map(mapping);
 },
