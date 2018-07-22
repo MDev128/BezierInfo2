@@ -22,10 +22,10 @@ module.exports = {
   flattening: require("./flattening"),
   splitting: require("./splitting"),
   matrixsplit: require("./matrixsplit"),
-  reordering: require("./reordering"),
 
   // information that can be obtained through analysis
   derivatives: require("./derivatives"),
+  reordering: require("./reordering"),
   pointvectors: require("./pointvectors"),
   pointvectors3d: require("./pointvectors3d"),
   components: require("./components"),
@@ -58,7 +58,7 @@ module.exports = {
   // "things made of more than on curve"
   polybezier: require("./polybezier"),
   shapes: require("./shapes"),
-  //drawing: require("./drawing"),
+  drawing: require("./drawing"),
 
   // curve offsetting
   projections: require("./projections"),

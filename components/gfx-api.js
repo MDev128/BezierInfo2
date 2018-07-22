@@ -6,6 +6,9 @@ var sin = Math.sin;
 var cos = Math.cos;
 var PI = Math.PI;
 
+var mouseMoveLock = 0;
+var mouseMoveLocked = false;
+
 var API = {
   Paper: false,
 
@@ -72,11 +75,28 @@ var API = {
   },
 
   mouseMove: function(evt) {
+    // event protection - we don't want
+    // it to trigger too often.
+    var now = Date.now();
+    if (!mouseMoveLocked) {
+      mouseMoveLocked = true;
+      mouseMoveLock = now;
+    } else {
+      if (now - mouseMoveLock > 16) {
+        mouseMoveLocked = false;
+      }
+    }
+    if (mouseMoveLocked) return;
+
+    // real event processing:
     if(!this.props.static) {
 
       if (this.down) {
         this.dragging = true;
       }
+
+      this.mx = evt.offsetX;
+      this.my = evt.offsetY;
 
       var found = false;
       this.lpts.forEach(p => {
@@ -115,7 +135,7 @@ var API = {
       this.props.onMouseMove(evt, this);
     }
 
-    if (this.dragging && this.props.onMouseDrag) {
+    if (this.down && this.dragging && this.props.onMouseDrag) {
       this.props.onMouseDrag(evt, this);
     }
 
@@ -126,6 +146,7 @@ var API = {
 
   mouseUp: function(evt) {
     this.down = false;
+    this.dragging = false;
     if(!this.movingPoint) {
       if (this.props.onMouseUp) {
         this.props.onMouseUp(evt, this);

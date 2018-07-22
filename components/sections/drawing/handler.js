@@ -1,85 +1,37 @@
-var fit = require('../../../lib/curve-fitter.js');
+var RDP = require('../../../lib/rdp.js');
 
 module.exports = {
   setup: function(api) {
     this.api = api;
-    this.reset();
-  },
+    api.setSize(600,250);
+    api.setPanelCount(1);
+    api.setColor('lightgrey');
+    api.drawGrid(20,10);
 
-  reset: function() {
-    this.points = [];
-    this.curveset = false;
-    this.mode = 0;
-    if (this.api) {
-      let api = this.api;
-      api.setCurve(false);
-      api.reset();
-      api.redraw();
-    }
-  },
-
-  toggle: function() {
-    if (this.api) {
-      this.customTimeValues = false;
-      this.mode = (this.mode + 1) % fit.modes.length;
-      this.fitCurve(this.api);
-      this.api.redraw();
-    }
+    this.coordinates = [];
+    this.reduced = [];
   },
 
   draw: function(api, curve) {
-    api.setPanelCount(1);
-    api.reset();
-    api.setColor('lightgrey');
-    api.drawGrid(10,10);
-
+    if (this.reduced.length > 0) {
+      api.setColor('red');
+      api.drawPoints(this.reduced);
+    }
     api.setColor('black');
-
-    if (!this.curveset && this.points.length > 2) {
-      curve = this.fitCurve(api);
-    }
-
-    if (curve) {
-      api.drawCurve(curve);
-      api.drawSkeleton(curve);
-    }
-
-    api.drawPoints(this.points);
-
-    if (!this.customTimeValues) {
-      api.setFill(0);
-      api.text("using "+fit.modes[this.mode]+" t values", {x: 5, y: 10});
+    var last = this.coordinates.length - 1;
+    if (last >= 0) {
+      api.drawPoint(this.coordinates[last]);
     }
   },
 
-  processTimeUpdate(sliderid, timeValues) {
-    var api = this.api;
-    this.customTimeValues = true;
-    this.fitCurve(api, timeValues);
+  onMouseUp: function(evt, api) {
+    if (this.coordinates.length < 2) return;
+    this.reduced = RDP.runRDP(this.coordinates);
     api.redraw();
   },
 
-  fitCurve(api, timeValues) {
-    let bestFitData = fit(this.points, timeValues || this.mode),
-        x = bestFitData.C.x,
-        y = bestFitData.C.y,
-        bpoints = [];
-    x.forEach((r,i) => {
-      bpoints.push({
-        x: r[0],
-        y: y[i][0]
-      });
-    });
-    var curve = new api.Bezier(bpoints);
-    api.setCurve(curve);
-    this.curveset = true;
-    this.sliders.setOptions(bestFitData.S);
-    return curve;
-  },
-
-  onClick: function(evt, api) {
-    this.curveset = false;
-    this.points.push({x: api.mx, y: api.my });
+  onMouseDrag: function(evt, api) {
+    this.coordinates.push({x: api.mx, y: api.my });
     api.redraw();
   }
 };
